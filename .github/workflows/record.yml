@@ -31,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - "@PB7live|UCKrXlieQcrc4POpG796y18A"
+          - "@LofiAllDay|UCPWhI_Wk3QI8q_QmMaKq3Ig"
 
     steps:
       - name: Checkout Repository
