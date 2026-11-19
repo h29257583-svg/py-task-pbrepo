@@ -1,6 +1,6 @@
 name: YT VOD to Google Drive
 
-'on':
+on:
   workflow_dispatch:
     inputs:
       url:
@@ -62,20 +62,16 @@ jobs:
         run: |
           export PATH="$HOME/.deno/bin:$PATH"
           mkdir -p out
-          
           COOKIE_ARGS=()
           if [ -n "$YT_COOKIES" ]; then
-            printf "%s
-" "$YT_COOKIES" | sed '1s/^ï»¿//' > /tmp/cookies.txt
+            printf "%s\n" "$YT_COOKIES" | sed '1s/^\xef\xbb\xbf//' > /tmp/cookies.txt
             COOKIE_ARGS=(--cookies /tmp/cookies.txt)
           fi
-          
           PROXY_ARGS=()
           if curl -s --max-time 8 --proxy socks5h://127.0.0.1:40000 https://cloudflare.com/cdn-cgi/trace | grep -q "warp=on"; then
             echo "WARP proxy is ACTIVE"
             PROXY_ARGS=(--proxy socks5h://127.0.0.1:40000)
           fi
-          
           FMT="bestvideo[height=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height=1080]+bestaudio/bestvideo[height=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height=720]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
           COMMON=(
             --no-playlist
@@ -88,7 +84,6 @@ jobs:
             -f "$FMT"
             -o "out/%(title).80s [%(id)s].%(ext)s"
           )
-          
           SUCCESS=0
           if [ ${#COOKIE_ARGS[@]} -gt 0 ]; then
             echo "=== Attempt 1: With cookies and WARP ==="
@@ -96,26 +91,21 @@ jobs:
               SUCCESS=1
             fi
           fi
-          
           if [ $SUCCESS -eq 0 ]; then
             echo "=== Attempt 2: Cookie-free with WARP ==="
             if yt-dlp "${PROXY_ARGS[@]}" "${COMMON[@]}" "$VIDEO_URL"; then
               SUCCESS=1
             fi
           fi
-          
           if [ $SUCCESS -eq 0 ]; then
             echo "=== Attempt 3: Direct (iOS/Android/mweb) ==="
             if yt-dlp "${COMMON[@]}" --extractor-args "youtube:player_client=android,ios,mweb" "$VIDEO_URL"; then
               SUCCESS=1
             fi
           fi
-          
           rm -f /tmp/cookies.txt
-          
           echo "=== Check downloaded files in out/ ==="
           ls -lh out/
-          
           FILE_COUNT=$(find out -type f | wc -l)
           if [ "$FILE_COUNT" -eq 0 ]; then
             echo "ERROR: No video files downloaded! Failing step."
