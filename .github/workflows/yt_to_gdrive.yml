@@ -65,7 +65,7 @@ jobs:
           mkdir -p out
           COOKIE_ARGS=()
           if [ -n "$YT_COOKIES" ]; then
-            printf "%s\n" "$YT_COOKIES" > /tmp/cookies.txt
+            printf "%s\n" "$YT_COOKIES" | sed '1s/^\xef\xbb\xbf//' > /tmp/cookies.txt
             COOKIE_ARGS=(--cookies /tmp/cookies.txt)
           fi
           PROXY_ARGS=()
@@ -75,7 +75,6 @@ jobs:
           fi
           FMT="bestvideo[height=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height=1080]+bestaudio/bestvideo[height=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height=720]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
           COMMON=(
-            "${COOKIE_ARGS[@]}"
             --no-playlist
             --js-runtimes deno
             --remote-components ejs:github
@@ -86,9 +85,12 @@ jobs:
             -f "$FMT"
             -o "out/%(title).80s [%(id)s].%(ext)s"
           )
+          echo "Attempt 1: With cookies & WARP"
+          yt-dlp "${PROXY_ARGS[@]}" "${COOKIE_ARGS[@]}" "${COMMON[@]}" "$VIDEO_URL" || \
+          echo "Attempt 2: Cookie-free with WARP" || \
           yt-dlp "${PROXY_ARGS[@]}" "${COMMON[@]}" "$VIDEO_URL" || \
-          yt-dlp "${PROXY_ARGS[@]}" "${COMMON[@]}" --extractor-args "youtube:player_client=web_safari,mweb,tv" "$VIDEO_URL" || \
-          yt-dlp "${COMMON[@]}" --extractor-args "youtube:player_client=web_safari,mweb,web" "$VIDEO_URL"
+          echo "Attempt 3: Cookie-free direct" || \
+          yt-dlp "${COMMON[@]}" --extractor-args "youtube:player_client=web_safari,mweb,android" "$VIDEO_URL"
           rm -f /tmp/cookies.txt
           ls -lh out/
 
