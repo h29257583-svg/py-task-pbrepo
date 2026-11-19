@@ -1,6 +1,6 @@
 name: YT VOD to Google Drive
 
-on:
+'on':
   workflow_dispatch:
     inputs:
       url:
