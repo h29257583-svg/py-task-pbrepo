@@ -18,15 +18,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install rclone and test Google Drive first
+        env:
+          RCLONE_CONFIG_VAL: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rclone jq curl
+          python3 fix_rclone.py
+          REMOTE=$(rclone listremotes | head -n 1)
+          echo "Using remote: $REMOTE"
+          [ -n "$REMOTE" ] || { echo "No rclone remote found!"; exit 1; }
+          rclone lsd "$REMOTE" --max-depth 1
+          echo "Google Drive connection VERIFIED!"
+
       - name: Start bgutil PO-Token server
         run: |
           docker run -d --name bgutil -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider || true
           sleep 3
 
-      - name: Install Deno, ffmpeg, yt-dlp, rclone and WARP
+      - name: Install Deno, ffmpeg, yt-dlp and WARP
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg jq curl unzip gnupg lsb-release rclone
+          sudo apt-get install -y -qq ffmpeg unzip gnupg lsb-release
           curl -fsSL https://deno.land/install.sh | sh
           echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
           python3 -m pip install -U yt-dlp bgutil-ytdlp-pot-provider curl_cffi
@@ -79,19 +94,9 @@ jobs:
 
       - name: Upload to Google Drive via rclone
         env:
-          RCLONE_CONFIG_VAL: ${{ secrets.RCLONE_CONFIG }}
           GDRIVE_FOLDER: ${{ github.event.inputs.folder }}
         run: |
-          mkdir -p ~/.config/rclone
-          if printf "%s" "$RCLONE_CONFIG_VAL" | grep -q '^\[.*\]'; then
-            printf "%s\n" "$RCLONE_CONFIG_VAL" > ~/.config/rclone/rclone.conf
-          else
-            printf "%s" "$RCLONE_CONFIG_VAL" | base64 -d > ~/.config/rclone/rclone.conf
-          fi
-          python3 -c 'import json,pathlib; cfg=pathlib.Path.home()/".config/rclone/rclone.conf"; out=[]; [out.append(l if not (l.strip().startswith("token") and "=" in l) else (l if (lambda v: (json.loads(v),True)[1] if v.startswith("{"") else False)(l.split("=",1)[1].strip()) else l.split("=",1)[0].strip()+" = "+json.dumps({pk.strip().strip("\"\x27"):(int(pv.strip().strip("\"\x27")) if pv.strip().strip("\"\x27").isdigit() else pv.strip().strip("\"\x27")) for part in l.split("=",1)[1].strip()[1:-1].split(",") if ":" in part for pk,pv in [part.split(":",1)]}))) for l in cfg.read_text().splitlines()]; cfg.write_text("\n".join(out)+"\n")'
           REMOTE=$(rclone listremotes | head -n 1)
-          echo "Using remote: $REMOTE"
-          [ -n "$REMOTE" ] || { echo "No rclone remote found!"; exit 1; }
           rclone copy out/ "${REMOTE}${GDRIVE_FOLDER}/" --drive-chunk-size 64M --stats 20s -v
           echo "=== Uploaded files in ${REMOTE}${GDRIVE_FOLDER}/ ==="
           rclone ls "${REMOTE}${GDRIVE_FOLDER}/"
