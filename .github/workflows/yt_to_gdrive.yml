@@ -1,0 +1,97 @@
+name: YT VOD to Google Drive
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'YouTube Video URL'
+        required: true
+        type: string
+      folder:
+        description: 'Google Drive Folder Name'
+        required: false
+        default: 'SavedVideos'
+        type: string
+
+jobs:
+  download_and_upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Start bgutil PO-Token server
+        run: |
+          docker run -d --name bgutil -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider || true
+          sleep 3
+
+      - name: Install Deno, ffmpeg, yt-dlp, rclone and WARP
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg jq curl unzip gnupg lsb-release rclone
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
+          python3 -m pip install -U yt-dlp bgutil-ytdlp-pot-provider curl_cffi
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq cloudflare-warp || true
+          sudo systemctl start warp-svc || true
+          sleep 2
+          warp-cli --accept-tos registration new || true
+          warp-cli --accept-tos mode proxy || true
+          warp-cli --accept-tos proxy port 40000 || true
+          warp-cli --accept-tos connect || true
+          sleep 3
+
+      - name: Download Video (1080p priority, 720p fallback)
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+          VIDEO_URL: ${{ github.event.inputs.url }}
+        run: |
+          export PATH="$HOME/.deno/bin:$PATH"
+          mkdir -p out
+          COOKIE_ARGS=()
+          if [ -n "$YT_COOKIES" ]; then
+            printf "%s\n" "$YT_COOKIES" > /tmp/cookies.txt
+            COOKIE_ARGS=(--cookies /tmp/cookies.txt)
+          fi
+          PROXY_ARGS=()
+          if curl -s --max-time 8 --proxy socks5h://127.0.0.1:40000 https://cloudflare.com/cdn-cgi/trace | grep -q "warp=on"; then
+            echo "WARP proxy is ACTIVE"
+            PROXY_ARGS=(--proxy socks5h://127.0.0.1:40000)
+          fi
+          FMT="bestvideo[height=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height=1080]+bestaudio/bestvideo[height=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height=720]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+          COMMON=(
+            "${COOKIE_ARGS[@]}"
+            --no-playlist
+            --js-runtimes deno
+            --remote-components ejs:github
+            --concurrent-fragments 8
+            --retries 10
+            --fragment-retries 10
+            --merge-output-format mp4
+            -f "$FMT"
+            -o "out/%(title).80s [%(id)s].%(ext)s"
+          )
+          yt-dlp "${PROXY_ARGS[@]}" "${COMMON[@]}" "$VIDEO_URL" || \
+          yt-dlp "${PROXY_ARGS[@]}" "${COMMON[@]}" --extractor-args "youtube:player_client=web_safari,mweb,tv" "$VIDEO_URL" || \
+          yt-dlp "${COMMON[@]}" --extractor-args "youtube:player_client=web_safari,mweb,web" "$VIDEO_URL"
+          rm -f /tmp/cookies.txt
+          ls -lh out/
+
+      - name: Upload to Google Drive via rclone
+        env:
+          RCLONE_CONFIG_VAL: ${{ secrets.RCLONE_CONFIG }}
+          GDRIVE_FOLDER: ${{ github.event.inputs.folder }}
+        run: |
+          mkdir -p ~/.config/rclone
+          if printf "%s" "$RCLONE_CONFIG_VAL" | grep -q '^\[.*\]'; then
+            printf "%s\n" "$RCLONE_CONFIG_VAL" > ~/.config/rclone/rclone.conf
+          else
+            printf "%s" "$RCLONE_CONFIG_VAL" | base64 -d > ~/.config/rclone/rclone.conf
+          fi
+          REMOTE=$(rclone listremotes | head -n 1)
+          echo "Using remote: $REMOTE"
+          [ -n "$REMOTE" ] || { echo "No rclone remote found!"; exit 1; }
+          rclone copy out/ "${REMOTE}${GDRIVE_FOLDER}/" --drive-chunk-size 64M --stats 20s -v
+          echo "=== Uploaded files in ${REMOTE}${GDRIVE_FOLDER}/ ==="
+          rclone ls "${REMOTE}${GDRIVE_FOLDER}/"
+          rm -f ~/.config/rclone/rclone.conf
