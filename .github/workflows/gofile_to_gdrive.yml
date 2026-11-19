@@ -1,0 +1,59 @@
+name: Gofile to Google Drive
+
+on:
+  workflow_dispatch:
+    inputs:
+      gofile_id:
+        description: 'Gofile ID (e.g. a3mHj66X)'
+        required: true
+        type: string
+      folder:
+        description: 'Google Drive Folder Name'
+        required: false
+        default: 'SavedVideos'
+        type: string
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Install rclone and jq
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq curl rclone
+
+      - name: Download from Gofile
+        env:
+          GOFILE_ID: ${{ github.event.inputs.gofile_id }}
+        run: |
+          mkdir -p out
+          TOKEN=$(curl -sS -X POST "https://api.gofile.io/accounts" | jq -r '.data.token')
+          WT=$(curl -sS "https://gofile.io/dist/js/config.js" | grep -oE 'wt["'\'']?[[:space:]]*[:=][[:space:]]*["'\''][A-Za-z0-9]+' | grep -oE '[A-Za-z0-9]+$' | head -n 1 || true)
+          [ -z "$WT" ] && WT="4fd6sg89d7s6"
+          META=$(curl -sS -H "Authorization: Bearer $TOKEN" "https://api.gofile.io/contents/${GOFILE_ID}?wt=${WT}")
+          LINK=$(echo "$META" | jq -r '.data.children | to_entries[0].value.link // empty')
+          NAME=$(echo "$META" | jq -r '.data.children | to_entries[0].value.name // empty')
+          echo "File: $NAME"
+          [ -n "$LINK" ] || { echo "Gofile API error: $META"; exit 1; }
+          curl -L --fail --retry 3 -H "Cookie: accountToken=$TOKEN" -o "out/$NAME" "$LINK"
+          ls -lh out/
+
+      - name: Upload to Google Drive via rclone
+        env:
+          RCLONE_CONFIG_VAL: ${{ secrets.RCLONE_CONFIG }}
+          GDRIVE_FOLDER: ${{ github.event.inputs.folder }}
+        run: |
+          mkdir -p ~/.config/rclone
+          if printf "%s" "$RCLONE_CONFIG_VAL" | grep -q '^\[.*\]'; then
+            printf "%s\n" "$RCLONE_CONFIG_VAL" > ~/.config/rclone/rclone.conf
+          else
+            printf "%s" "$RCLONE_CONFIG_VAL" | base64 -d > ~/.config/rclone/rclone.conf
+          fi
+          REMOTE=$(rclone listremotes | head -n 1)
+          echo "Using remote: $REMOTE"
+          [ -n "$REMOTE" ] || { echo "No rclone remote found!"; exit 1; }
+          rclone copy out/ "${REMOTE}${GDRIVE_FOLDER}/" --drive-chunk-size 64M --stats 15s -v
+          echo "=== Uploaded files in ${REMOTE}${GDRIVE_FOLDER}/ ==="
+          rclone ls "${REMOTE}${GDRIVE_FOLDER}/"
+          rm -f ~/.config/rclone/rclone.conf
