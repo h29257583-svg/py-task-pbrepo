@@ -88,29 +88,7 @@ jobs:
           else
             printf "%s" "$RCLONE_CONFIG_VAL" | base64 -d > ~/.config/rclone/rclone.conf
           fi
-          python3 - << 'PYFIX'
-import json, pathlib
-cfg = pathlib.Path.home() / ".config/rclone/rclone.conf"
-lines = []
-for line in cfg.read_text(encoding="utf-8").splitlines():
-    if line.strip().startswith("token") and "=" in line:
-        k, v = line.split("=", 1)
-        raw = v.strip()
-        try:
-            json.loads(raw)
-        except Exception:
-            if raw.startswith("{") and raw.endswith("}"):
-                obj = {}
-                for part in raw[1:-1].split(","):
-                    if ":" in part:
-                        pk, pv = part.split(":", 1)
-                        pk = pk.strip().strip('"').strip("'")
-                        pv = pv.strip().strip('"').strip("'")
-                        obj[pk] = int(pv) if pv.isdigit() else pv
-                line = f"{k.strip()} = {json.dumps(obj)}"
-    lines.append(line)
-cfg.write_text("\n".join(lines) + "\n", encoding="utf-8")
-PYFIX
+          python3 -c 'import json,pathlib; cfg=pathlib.Path.home()/".config/rclone/rclone.conf"; out=[]; [out.append(l if not (l.strip().startswith("token") and "=" in l) else (l if (lambda v: (json.loads(v),True)[1] if v.startswith("{"") else False)(l.split("=",1)[1].strip()) else l.split("=",1)[0].strip()+" = "+json.dumps({pk.strip().strip("\"\x27"):(int(pv.strip().strip("\"\x27")) if pv.strip().strip("\"\x27").isdigit() else pv.strip().strip("\"\x27")) for part in l.split("=",1)[1].strip()[1:-1].split(",") if ":" in part for pk,pv in [part.split(":",1)]}))) for l in cfg.read_text().splitlines()]; cfg.write_text("\n".join(out)+"\n")'
           REMOTE=$(rclone listremotes | head -n 1)
           echo "Using remote: $REMOTE"
           [ -n "$REMOTE" ] || { echo "No rclone remote found!"; exit 1; }
