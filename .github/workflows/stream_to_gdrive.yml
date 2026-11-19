@@ -1,0 +1,61 @@
+name: Stream to Google Drive
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Direct File Download URL'
+        required: true
+        type: string
+      filename:
+        description: 'Target Filename'
+        required: true
+        type: string
+      folder:
+        description: 'Google Drive Streamer Folder'
+        required: true
+        type: string
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install rclone and verify Google Drive
+        env:
+          RCLONE_CONFIG_VAL: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rclone curl
+          python3 fix_rclone.py
+          REMOTE=$(rclone listremotes | head -n 1)
+          echo "Using remote: $REMOTE"
+          [ -n "$REMOTE" ] || { echo "No rclone remote found!"; exit 1; }
+          rclone lsd "$REMOTE" --max-depth 1
+          echo "Google Drive connection VERIFIED!"
+
+      - name: Download file
+        env:
+          FILE_URL: ${{ github.event.inputs.url }}
+          FNAME: ${{ github.event.inputs.filename }}
+        run: |
+          mkdir -p out
+          echo "Downloading $FNAME..."
+          curl -L --fail --retry 10 --retry-delay 3 -C - -o "out/$FNAME" "$FILE_URL"
+          ls -lh out/
+
+      - name: Upload to Google Drive
+        env:
+          GDRIVE_FOLDER: ${{ github.event.inputs.folder }}
+          FNAME: ${{ github.event.inputs.filename }}
+        run: |
+          REMOTE=$(rclone listremotes | head -n 1)
+          DEST="${REMOTE}${GDRIVE_FOLDER}/"
+          echo "Uploading out/$FNAME to $DEST"
+          rclone copy "out/$FNAME" "$DEST" --drive-chunk-size 64M --stats 15s -v
+          echo "=== Completed Upload in $DEST ==="
+          rclone ls "$DEST"
+          rm -f ~/.config/rclone/rclone.conf
